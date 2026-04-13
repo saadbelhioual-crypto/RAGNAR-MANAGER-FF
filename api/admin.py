@@ -11,6 +11,24 @@ TOKEN_FILE = DATA_PATH + 'amine_token.txt'
 
 os.makedirs(DATA_PATH, exist_ok=True)
 
+def init_files():
+    if not os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'w') as f:
+            json.dump({
+                "RAGNAR": {
+                    "password": hashlib.sha256("RAGNAR-TOP-1".encode()).hexdigest(),
+                    "role": "admin",
+                    "created": str(datetime.now()),
+                    "keys_created": []
+                }
+            }, f)
+    
+    if not os.path.exists(KEYS_FILE):
+        with open(KEYS_FILE, 'w') as f:
+            json.dump({}, f)
+
+import hashlib
+
 HTML_ADMIN = '''<!DOCTYPE html>
 <html dir="rtl">
 <head>
@@ -99,6 +117,7 @@ HTML_ADMIN = '''<!DOCTYPE html>
         .delete-btn:hover { background: red; }
         .success { background: rgba(0,255,0,0.2); border: 1px solid green; padding: 10px; border-radius: 8px; margin-top: 10px; color: #00ff00; }
         .error { background: rgba(255,0,0,0.2); border: 1px solid red; padding: 10px; border-radius: 8px; margin-top: 10px; color: #ff4444; }
+        code { background: #1a1a1a; padding: 5px 10px; border-radius: 5px; font-family: monospace; }
     </style>
 </head>
 <body>
@@ -232,12 +251,14 @@ HTML_ADMIN = '''<!DOCTYPE html>
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        init_files()
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
         self.end_headers()
         self.wfile.write(HTML_ADMIN.encode())
     
     def do_POST(self):
+        init_files()
         content_length = int(self.headers['Content-Length'])
         post_data = json.loads(self.rfile.read(content_length))
         
@@ -255,10 +276,6 @@ class handler(BaseHTTPRequestHandler):
         
         if action == 'get_stats':
             active_keys = sum(1 for k, v in keys.items() if datetime.fromisoformat(v['expiry']) > datetime.now())
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
             
             users_list = []
             for username, data in users.items():
@@ -280,6 +297,9 @@ class handler(BaseHTTPRequestHandler):
                     'days_left': days_left
                 })
             
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
             self.wfile.write(json.dumps({
                 'total_users': len(users_list),
                 'active_keys': active_keys,
@@ -287,6 +307,7 @@ class handler(BaseHTTPRequestHandler):
                 'users': users_list,
                 'keys': keys_list
             }).encode())
+            return
         
         elif action == 'create_key':
             key_name = post_data.get('key_name', '')
@@ -294,6 +315,14 @@ class handler(BaseHTTPRequestHandler):
             
             if not key_name:
                 key_name = f"KEY_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            
+            # التحقق من عدم وجود المفتاح مسبقاً
+            if key_name in keys:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'المفتاح موجود مسبقاً'}).encode())
+                return
             
             expiry = datetime.now() + timedelta(days=days)
             keys[key_name] = {'expiry': expiry.isoformat()}
@@ -305,6 +334,7 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({'success': True, 'key': key_name}).encode())
+            return
         
         elif action == 'delete_user':
             username = post_data.get('username')
@@ -313,6 +343,7 @@ class handler(BaseHTTPRequestHandler):
                 with open(USERS_FILE, 'w') as f:
                     json.dump(users, f)
                 
+                # حذف توكنات المستخدم
                 to_delete = [k for k in tokens if k.startswith(username + ':')]
                 for k in to_delete:
                     del tokens[k]
@@ -323,6 +354,12 @@ class handler(BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': True}).encode())
+            else:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'لا يمكن حذف المالك'}).encode())
+            return
         
         elif action == 'delete_key':
             key = post_data.get('key')
@@ -335,3 +372,15 @@ class handler(BaseHTTPRequestHandler):
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': True}).encode())
+            else:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'المفتاح غير موجود'}).encode())
+            return
+        
+        # إذا لم يطابق أي action
+        self.send_response(404)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({'error': 'Action not found'}).encode())
