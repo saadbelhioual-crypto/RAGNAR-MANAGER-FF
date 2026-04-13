@@ -9,18 +9,11 @@
     { "src": "/", "dest": "/api/index.py" },
     { "src": "/login", "dest": "/api/index.py" },
     { "src": "/dashboard", "dest": "/api/dashboard.py" },
-    { "src": "/admin", "dest": "/api/admin.py" },
-    { "src": "/api/(.*)", "dest": "/api/$1" }
+    { "src": "/admin", "dest": "/api/admin.py" }
   ],
   "env": {
     "SECRET_KEY": "RAGNAR_SECRET_KEY_2026",
     "ADMIN_USER": "RAGNAR",
     "ADMIN_PASS": "RAGNAR-TOP-1"
-  },
-  "builds": [
-    {
-      "src": "api/*.py",
-      "use": "@vercel/python"
-    }
-  ]
+  }
 }
