@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler
+import hashlib
 import urllib.parse
 
 DATA_PATH = '/tmp/data/'
@@ -26,8 +26,12 @@ def init_files():
     if not os.path.exists(KEYS_FILE):
         with open(KEYS_FILE, 'w') as f:
             json.dump({}, f)
+    
+    if not os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, 'w') as f:
+            json.dump({}, f)
 
-import hashlib
+init_files()
 
 HTML_ADMIN = '''<!DOCTYPE html>
 <html dir="rtl">
@@ -126,12 +130,12 @@ HTML_ADMIN = '''<!DOCTYPE html>
         <div class="logout" onclick="logout()">تسجيل خروج</div>
     </div>
     <div class="container">
-        <div class="stats-grid" id="stats"></div>
+        <div class="stats-grid" id="stats">جاري التحميل...</div>
         
         <div class="card">
             <div class="card-title">🔑 إنشاء مفتاح جديد</div>
             <div class="input-group">
-                <input type="text" id="keyName" placeholder="اسم المفتاح">
+                <input type="text" id="keyName" placeholder="اسم المفتاح" dir="ltr">
             </div>
             <div class="input-group">
                 <input type="number" id="days" placeholder="عدد الأيام" value="30">
@@ -142,76 +146,105 @@ HTML_ADMIN = '''<!DOCTYPE html>
         
         <div class="card">
             <div class="card-title">📊 قائمة المستخدمين</div>
-            <table id="usersTable">
-                <thead>
-                    <tr><th>اسم المستخدم</th><th>تاريخ الإنشاء</th><th>صلاحية حتى</th><th>المفتاح المستخدم</th><th>إجراء</th></tr>
-                </thead>
-                <tbody></tbody>
-            </table>
+            <div style="overflow-x: auto;">
+                <table id="usersTable">
+                    <thead>
+                        <tr><th>اسم المستخدم</th><th>تاريخ الإنشاء</th><th>صلاحية حتى</th><th>المفتاح المستخدم</th><th>إجراء</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
         </div>
         
         <div class="card">
             <div class="card-title">🔑 المفاتيح النشطة</div>
-            <table id="keysTable">
-                <thead>
-                    <tr><th>المفتاح</th><th>صالح حتى</th><th>الأيام المتبقية</th><th>إجراء</th></tr>
-                </thead>
-                <tbody></tbody>
-            </table>
+            <div style="overflow-x: auto;">
+                <table id="keysTable">
+                    <thead>
+                        <tr><th>المفتاح</th><th>صالح حتى</th><th>الأيام المتبقية</th><th>إجراء</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
         </div>
     </div>
     
     <script>
         async function loadData() {
-            const response = await fetch('/api/admin.py?action=get_stats');
-            const data = await response.json();
-            
-            document.getElementById('stats').innerHTML = `
-                <div class="stat-card"><div class="stat-number">${data.total_users}</div><div class="stat-label">إجمالي المستخدمين</div></div>
-                <div class="stat-card"><div class="stat-number">${data.active_keys}</div><div class="stat-label">المفاتيح النشطة</div></div>
-                <div class="stat-card"><div class="stat-number">${data.total_bots}</div><div class="stat-label">البوتات المشغلة</div></div>
-            `;
-            
-            let usersHtml = '';
-            for (const user of data.users) {
-                usersHtml += `<tr>
-                    <td>${user.username}</td>
-                    <td>${user.created}</td>
-                    <td>${user.expiry}</td>
-                    <td>${user.key_used || '-'}</td>
-                    <td><button class="delete-btn" onclick="deleteUser('${user.username}')">حذف</button></td>
-                </tr>`;
+            try {
+                const response = await fetch('/api/admin.py?action=get_stats');
+                const data = await response.json();
+                
+                document.getElementById('stats').innerHTML = `
+                    <div class="stat-card"><div class="stat-number">${data.total_users || 0}</div><div class="stat-label">إجمالي المستخدمين</div></div>
+                    <div class="stat-card"><div class="stat-number">${data.active_keys || 0}</div><div class="stat-label">المفاتيح النشطة</div></div>
+                    <div class="stat-card"><div class="stat-number">${data.total_bots || 0}</div><div class="stat-label">البوتات المشغلة</div></div>
+                `;
+                
+                let usersHtml = '';
+                if (data.users && data.users.length > 0) {
+                    for (const user of data.users) {
+                        usersHtml += `<tr>
+                            <td>${user.username}</td>
+                            <td>${user.created || '-'}</td>
+                            <td>${user.expiry || '-'}</td>
+                            <td>${user.key_used || '-'}</td>
+                            <td><button class="delete-btn" onclick="deleteUser('${user.username}')">حذف</button></td>
+                        </tr>`;
+                    }
+                } else {
+                    usersHtml = '<tr><td colspan="5" style="text-align:center">لا يوجد مستخدمين</td></tr>';
+                }
+                document.querySelector('#usersTable tbody').innerHTML = usersHtml;
+                
+                let keysHtml = '';
+                if (data.keys && data.keys.length > 0) {
+                    for (const key of data.keys) {
+                        keysHtml += `<tr>
+                            <td><code>${key.key}</code></td>
+                            <td>${key.expiry}</td>
+                            <td>${key.days_left}</td>
+                            <td><button class="delete-btn" onclick="deleteKey('${key.key}')">حذف</button></td>
+                        </tr>`;
+                    }
+                } else {
+                    keysHtml = '<tr><td colspan="4" style="text-align:center">لا يوجد مفاتيح</td></tr>';
+                }
+                document.querySelector('#keysTable tbody').innerHTML = keysHtml;
+            } catch(e) {
+                console.error(e);
+                document.getElementById('stats').innerHTML = '<div class="error">خطأ في تحميل البيانات</div>';
             }
-            document.querySelector('#usersTable tbody').innerHTML = usersHtml;
-            
-            let keysHtml = '';
-            for (const key of data.keys) {
-                keysHtml += `<tr>
-                    <td><code>${key.key}</code></td>
-                    <td>${key.expiry}</td>
-                    <td>${key.days_left}</td>
-                    <td><button class="delete-btn" onclick="deleteKey('${key.key}')">حذف</button></td>
-                </tr>`;
-            }
-            document.querySelector('#keysTable tbody').innerHTML = keysHtml;
         }
         
         async function createKey() {
             const keyName = document.getElementById('keyName').value;
             const days = document.getElementById('days').value;
             
-            const response = await fetch('/api/admin.py?action=create_key', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({key_name: keyName, days: parseInt(days)})
-            });
+            if (!keyName) {
+                document.getElementById('keyResult').innerHTML = '<div class="error">❌ الرجاء إدخال اسم المفتاح</div>';
+                return;
+            }
             
-            const data = await response.json();
-            if (data.success) {
-                document.getElementById('keyResult').innerHTML = '<div class="success">✅ المفتاح: <code>' + data.key + '</code><br>صالح لمدة ' + days + ' يوم</div>';
-                loadData();
-            } else {
-                document.getElementById('keyResult').innerHTML = '<div class="error">❌ ' + data.error + '</div>';
+            document.getElementById('keyResult').innerHTML = '<div class="success">⏳ جاري الإنشاء...</div>';
+            
+            try {
+                const response = await fetch('/api/admin.py?action=create_key', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({key_name: keyName, days: parseInt(days)})
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('keyResult').innerHTML = '<div class="success">✅ المفتاح: <code>' + data.key + '</code><br>📅 صالح لمدة ' + days + ' يوم</div>';
+                    document.getElementById('keyName').value = '';
+                    loadData();
+                } else {
+                    document.getElementById('keyResult').innerHTML = '<div class="error">❌ ' + data.error + '</div>';
+                }
+            } catch(e) {
+                document.getElementById('keyResult').innerHTML = '<div class="error">❌ خطأ في الاتصال بالخادم</div>';
             }
         }
         
@@ -254,16 +287,26 @@ class handler(BaseHTTPRequestHandler):
         init_files()
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
+        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(HTML_ADMIN.encode())
     
     def do_POST(self):
         init_files()
-        content_length = int(self.headers['Content-Length'])
+        
+        content_length = int(self.headers.get('Content-Length', 0))
+        if content_length == 0:
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': 'No data received'}).encode())
+            return
+        
         post_data = json.loads(self.rfile.read(content_length))
         
         parsed = urllib.parse.urlparse(self.path)
-        action = urllib.parse.parse_qs(parsed.query).get('action', [''])[0]
+        query_params = urllib.parse.parse_qs(parsed.query)
+        action = query_params.get('action', [''])[0]
         
         with open(USERS_FILE, 'r') as f:
             users = json.load(f)
@@ -273,6 +316,11 @@ class handler(BaseHTTPRequestHandler):
         
         with open(TOKEN_FILE, 'r') as f:
             tokens = json.load(f)
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
         
         if action == 'get_stats':
             active_keys = sum(1 for k, v in keys.items() if datetime.fromisoformat(v['expiry']) > datetime.now())
@@ -297,9 +345,6 @@ class handler(BaseHTTPRequestHandler):
                     'days_left': days_left
                 })
             
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
             self.wfile.write(json.dumps({
                 'total_users': len(users_list),
                 'active_keys': active_keys,
@@ -307,20 +352,15 @@ class handler(BaseHTTPRequestHandler):
                 'users': users_list,
                 'keys': keys_list
             }).encode())
-            return
         
         elif action == 'create_key':
-            key_name = post_data.get('key_name', '')
+            key_name = post_data.get('key_name', '').strip()
             days = post_data.get('days', 30)
             
             if not key_name:
                 key_name = f"KEY_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             
-            # التحقق من عدم وجود المفتاح مسبقاً
             if key_name in keys:
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': 'المفتاح موجود مسبقاً'}).encode())
                 return
             
@@ -330,11 +370,7 @@ class handler(BaseHTTPRequestHandler):
             with open(KEYS_FILE, 'w') as f:
                 json.dump(keys, f)
             
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
             self.wfile.write(json.dumps({'success': True, 'key': key_name}).encode())
-            return
         
         elif action == 'delete_user':
             username = post_data.get('username')
@@ -342,24 +378,9 @@ class handler(BaseHTTPRequestHandler):
                 del users[username]
                 with open(USERS_FILE, 'w') as f:
                     json.dump(users, f)
-                
-                # حذف توكنات المستخدم
-                to_delete = [k for k in tokens if k.startswith(username + ':')]
-                for k in to_delete:
-                    del tokens[k]
-                with open(TOKEN_FILE, 'w') as f:
-                    json.dump(tokens, f)
-                
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
                 self.wfile.write(json.dumps({'success': True}).encode())
             else:
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': 'لا يمكن حذف المالك'}).encode())
-            return
         
         elif action == 'delete_key':
             key = post_data.get('key')
@@ -367,20 +388,9 @@ class handler(BaseHTTPRequestHandler):
                 del keys[key]
                 with open(KEYS_FILE, 'w') as f:
                     json.dump(keys, f)
-                
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
                 self.wfile.write(json.dumps({'success': True}).encode())
             else:
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': 'المفتاح غير موجود'}).encode())
-            return
         
-        # إذا لم يطابق أي action
-        self.send_response(404)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps({'error': 'Action not found'}).encode())
+        else:
+            self.wfile.write(json.dumps({'error': 'Action not found'}).encode())
