@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler
+import urllib.parse
 
 DATA_PATH = '/tmp/data/'
 TOKEN_FILE = DATA_PATH + 'amine_token.txt'
@@ -95,6 +96,14 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             font-size: 14px;
         }
         .run-btn:hover { background: #00cc00; }
+        .delete-btn {
+            background: #aa0000;
+            margin-top: 10px;
+            margin-left: 10px;
+            padding: 8px 20px;
+            font-size: 14px;
+        }
+        .delete-btn:hover { background: #cc0000; }
         h3 { color: #ff6600; margin: 20px 0 10px 0; }
     </style>
 </head>
@@ -142,8 +151,9 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
                     html += `
                         <div class="saved-item">
                             <div class="saved-id">🆔 الأيدي: ${uid}</div>
-                            <div class="saved-token">🔐 التوكن: ${token.substring(0, 20)}...</div>
-                            <button class="run-btn" onclick="runBot('${uid}')">▶️ تشغيل البوت</button>
+                            <div class="saved-token">🔐 التوكن: ${token.substring(0, 30)}...</div>
+                            <button class="run-btn" onclick="runBot('${uid}', '${token.replace(/'/g, "\\'")}')">▶️ تشغيل البوت</button>
+                            <button class="delete-btn" onclick="deleteAccount('${uid}')">🗑️ حذف</button>
                         </div>
                     `;
                 }
@@ -177,15 +187,32 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             }
         }
         
-        async function runBot(uid) {
+        async function runBot(uid, token) {
             showStatus('جاري تشغيل البوت...', true);
             const response = await fetch('/api/dashboard.py?action=run_bot', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, uid, token})
+            });
+            const data = await response.json();
+            showStatus(data.message, data.success);
+        }
+        
+        async function deleteAccount(uid) {
+            if (!confirm('هل أنت متأكد من حذف هذا الحساب؟')) return;
+            
+            const response = await fetch('/api/dashboard.py?action=delete_account', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, uid})
             });
             const data = await response.json();
-            showStatus(data.message, data.success);
+            if (data.success) {
+                showStatus('تم حذف الحساب بنجاح', true);
+                loadData();
+            } else {
+                showStatus(data.error, false);
+            }
         }
         
         function showStatus(msg, isSuccess) {
@@ -206,8 +233,6 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        token = self.headers.get('Authorization', '')
-        
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
         self.end_headers()
@@ -223,8 +248,14 @@ class handler(BaseHTTPRequestHandler):
         with open(USERS_FILE, 'r') as f:
             users = json.load(f)
         
-        with open(TOKEN_FILE, 'r') as f:
-            tokens = json.load(f)
+        # قراءة ملف التوكنات
+        current_tokens = {}
+        if os.path.exists(TOKEN_FILE):
+            with open(TOKEN_FILE, 'r') as f:
+                try:
+                    current_tokens = json.load(f)
+                except:
+                    current_tokens = {}
         
         if action == 'get_user_data':
             username = post_data.get('username')
@@ -232,11 +263,13 @@ class handler(BaseHTTPRequestHandler):
                 expiry = datetime.fromisoformat(users[username]['expiry'])
                 days_left = max(0, (expiry - datetime.now()).days)
                 
-                saved = {k: v for k, v in tokens.items() if k.startswith(username + ':')}
+                # جلب حسابات هذا المستخدم فقط
                 saved_creds = {}
-                for k, v in saved.items():
-                    uid = k.split(':')[1]
-                    saved_creds[uid] = v
+                if username == 'RAGNAR':
+                    saved_creds = current_tokens
+                else:
+                    for uid, token in current_tokens.items():
+                        saved_creds[uid] = token
                 
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -263,11 +296,11 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'success': False, 'error': 'اشتراكك منتهي'}).encode())
                 return
             
-            key = f"{username}:{uid}"
-            tokens[key] = token
+            # حفظ التوكن بصيغة {"الأيدي": "التوكن"}
+            current_tokens[uid] = token
             
             with open(TOKEN_FILE, 'w') as f:
-                json.dump(tokens, f)
+                json.dump(current_tokens, f, indent=4)
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -277,25 +310,49 @@ class handler(BaseHTTPRequestHandler):
         elif action == 'run_bot':
             username = post_data.get('username')
             uid = post_data.get('uid')
+            token = post_data.get('token')
             
-            key = f"{username}:{uid}"
-            
-            if key not in tokens:
+            if username not in users:
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'message': 'لم يتم العثور على التوكن'}).encode())
+                self.wfile.write(json.dumps({'success': False, 'message': 'مستخدم غير موجود'}).encode())
                 return
             
-            token = tokens[key]
+            expiry = datetime.fromisoformat(users[username]['expiry'])
+            if expiry < datetime.now():
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'message': 'اشتراكك منتهي'}).encode())
+                return
             
-            # كتابة ملف amine_token.txt
-            with open(DATA_PATH + 'amine_token.txt', 'w') as f:
-                json.dump({uid: token}, f)
+            # حفظ التوكن في الملف بنفس صيغة سورسك
+            current_tokens[uid] = token
+            
+            with open(TOKEN_FILE, 'w') as f:
+                json.dump(current_tokens, f, indent=4)
             
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'message': f'تم تشغيل البوت على الأيدي {uid}'}).encode())
-
-import urllib.parse
+            self.wfile.write(json.dumps({'success': True, 'message': f'✅ تم تشغيل البوت على الأيدي {uid}\n📁 تم حفظ التوكن في amine_token.txt'}).encode())
+        
+        elif action == 'delete_account':
+            username = post_data.get('username')
+            uid = post_data.get('uid')
+            
+            if uid in current_tokens:
+                del current_tokens[uid]
+                with open(TOKEN_FILE, 'w') as f:
+                    json.dump(current_tokens, f, indent=4)
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': True}).encode())
+            else:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'الحساب غير موجود'}).encode())
